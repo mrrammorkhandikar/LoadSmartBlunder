@@ -12,7 +12,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { NotificationPanel } from "@/components/notification-panel";
 import { GlobalSearch } from "@/components/global-search";
-//import { HelpBotWidget } from "@/components/HelpBotWidget";
+import { HelpBotWidget } from "@/components/HelpBotWidget";
 import { MockDataProvider } from "@/lib/mock-data-store";
 import { DocumentVaultProvider } from "@/lib/document-vault-store";
 import { AdminDataProvider } from "@/lib/admin-data-store";

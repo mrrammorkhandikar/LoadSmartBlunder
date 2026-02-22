@@ -2,7 +2,7 @@ FROM node:20-alpine
 
 WORKDIR /workspace/frontend
 
-ARG NODE_ENV=production
+ARG NODE_ENV=development
 ENV NODE_ENV=$NODE_ENV
 
 COPY frontend/package*.json ./

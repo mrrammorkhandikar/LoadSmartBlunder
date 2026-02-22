@@ -33,6 +33,22 @@ if (useMemDb) {
     returns: DataType.uuid,
     implementation: () => randomUUID()
   });
+  memDb.public.registerFunction({
+    name: "to_regclass",
+    args: [DataType.text],
+    returns: DataType.text,
+    implementation: (name: string) => name,
+  });
+  memDb.public.registerFunction({
+    name: "to_timestamp",
+    args: [DataType.text],
+    returns: DataType.timestamp,
+    implementation: (value: string) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return new Date();
+      return new Date(num * 1000);
+    },
+  });
 
   // Create the PG adapter
   const { Pool: MemPool } = memDb.adapters.createPg();

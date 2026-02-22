@@ -1,4 +1,14 @@
+import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 import { webcrypto } from "node:crypto";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({
+  path: path.resolve(__dirname, "..", ".env"),
+});
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import session from "express-session";
@@ -92,6 +102,13 @@ const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
 const twilioVerifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
 const twilioClient = twilioAccountSid && twilioAuthToken ? twilio(twilioAccountSid, twilioAuthToken) : null;
 
+console.log("Twilio config status", {
+  cwd: process.cwd(),
+  hasSid: !!twilioAccountSid,
+  hasToken: !!twilioAuthToken,
+  hasServiceSid: !!twilioVerifyServiceSid,
+});
+
 const normalizePhoneForTwilio = (phone: string) => {
   const cleaned = phone.trim().replace(/[^\d+]/g, "");
   if (cleaned.startsWith("+")) return cleaned;
@@ -101,7 +118,8 @@ const normalizePhoneForTwilio = (phone: string) => {
   return phone;
 };
 
-const canUseTwilioVerify = () => Boolean(twilioClient && twilioVerifyServiceSid);
+const canUseTwilioVerify = () =>
+  Boolean(twilioClient && twilioVerifyServiceSid);
 
 const sendTwilioOtp = async (phone: string) => {
   if (!twilioClient || !twilioVerifyServiceSid) {
@@ -124,6 +142,13 @@ const checkTwilioOtp = async (phone: string, code: string) => {
     code,
   });
   return result.status === "approved";
+};
+
+const normalizePhone10 = (phone: string | null | undefined) => {
+  if (!phone) return "";
+  const digits = phone.replace(/[^\d]/g, "");
+  if (digits.length < 10) return "";
+  return digits.slice(-10);
 };
 
 const maskPhone = (phone: string) => {
@@ -201,6 +226,7 @@ export async function registerRoutes(
   }
   
   const isProduction = process.env.NODE_ENV === "production";
+  const useMemDb = process.env.USE_MEM_DB === "true";
 
   if (isProduction) {
     app.use((req, res, next) => {
@@ -212,29 +238,31 @@ export async function registerRoutes(
     });
   }
   
-  // Use PostgreSQL session store for production persistence
   const PgSession = connectPgSimple(session);
-  
-  app.use(
-    session({
-      store: new PgSession({
-        pool: pool,
-        tableName: "session",
-        createTableIfMissing: true,
-      }),
-      secret: process.env.SESSION_SECRET || "loadsmart-secret-key-change-in-production",
-      resave: false,
-      saveUninitialized: false,
-      proxy: true,
-      cookie: {
-        secure: false,
-        httpOnly: true,
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-        sameSite: "lax",
-        domain: undefined,
-      },
-    })
-  );
+
+  const sessionOptions: session.SessionOptions = {
+    secret: process.env.SESSION_SECRET || "loadsmart-secret-key-change-in-production",
+    resave: false,
+    saveUninitialized: false,
+    proxy: true,
+    cookie: {
+      secure: false,
+      httpOnly: true,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      sameSite: "lax",
+      domain: undefined,
+    },
+  };
+
+  if (!useMemDb) {
+    sessionOptions.store = new PgSession({
+      pool: pool,
+      tableName: "session",
+      createTableIfMissing: true,
+    });
+  }
+
+  app.use(session(sessionOptions));
 
   registerHelpBotRoutes(app);
   registerSurepassRoutes(app);
@@ -249,9 +277,10 @@ export async function registerRoutes(
       const { otpId, ...userData } = req.body;
       const data = insertUserSchema.parse(userData);
       const isDevBypass = process.env.NODE_ENV !== "production";
+      const normalizePhone = (p: string | null | undefined) =>
+        p ? p.replace(/[\s\-\+]/g, "").slice(-10) : "";
 
       if (!isDevBypass) {
-        // All users must verify their phone number with OTP
         if (!otpId) {
           return res.status(400).json({ error: "Phone verification required for registration" });
         }
@@ -262,18 +291,17 @@ export async function registerRoutes(
         }
         
         if (otpRecord.status !== "verified") {
-          console.log(`[Register] OTP status check failed. Status: ${otpRecord.status}, ID: ${otpId}`);
           return res.status(400).json({ error: `Phone verification expired or already used. Please verify your phone again.` });
         }
         
-        const normalizePhone = (p: string) => p.replace(/[\s\-\+]/g, "").slice(-10);
         if (normalizePhone(otpRecord.phoneNumber || "") !== normalizePhone(data.phone || "")) {
           return res.status(400).json({ error: "Phone number mismatch. The verified phone number doesn't match the one provided." });
         }
         
-        // Clean up used OTP by marking it as consumed
         await storage.updateOtpVerification(otpId, { status: "consumed" });
       }
+      
+      const normalizedPhoneForUser = data.phone ? normalizePhone(data.phone) : undefined;
       
       const existingUser = await storage.getUserByUsername(data.username);
       if (existingUser) {
@@ -290,6 +318,7 @@ export async function registerRoutes(
       const hashedPassword = await hashPassword(data.password);
       let user = await storage.createUser({
         ...data,
+        phone: normalizedPhoneForUser ?? data.phone,
         password: hashedPassword,
       });
 
@@ -14319,30 +14348,28 @@ RESPOND IN THIS EXACT JSON FORMAT:
         return res.status(400).json({ error: "Phone number is required" });
       }
 
-      // Validate phone format
       const phoneRegex = /^(\+91[\s-]?)?[6-9]\d{9}$/;
       const cleanedPhone = rawPhone.replace(/[\s-]/g, "");
       if (!phoneRegex.test(cleanedPhone)) {
         return res.status(400).json({ error: "Invalid Indian phone number format" });
       }
 
-      // Normalize phone number - try multiple formats for lookup
-      // Users might have stored their phone as +91XXXXXXXXXX or XXXXXXXXXX
-      const normalizedPhone = cleanedPhone.startsWith("+91") ? cleanedPhone : `+91 ${cleanedPhone}`;
-      const phoneWithoutCode = cleanedPhone.replace(/^\+91/, "");
-      
-      // Try finding user with different phone formats
-      let user = await storage.getUserByPhone(phone);
-      if (!user) {
-        user = await storage.getUserByPhone(normalizedPhone);
+      const targetPhoneNormalized = normalizePhone10(cleanedPhone);
+      if (!targetPhoneNormalized) {
+        return res.status(400).json({ error: "Invalid phone number format" });
       }
-      if (!user) {
-        user = await storage.getUserByPhone(phoneWithoutCode);
-      }
-      if (!user) {
-        user = await storage.getUserByPhone(`+91${phoneWithoutCode}`);
-      }
-      
+
+      const allUsers = await storage.getAllUsers();
+      const user = allUsers.find((u) => normalizePhone10(u.phone || "") === targetPhoneNormalized);
+
+      console.info("Login OTP phone lookup", {
+        rawPhone,
+        cleanedPhone,
+        targetPhoneNormalized,
+        usersCount: allUsers.length,
+        matchedUserId: user?.id,
+      });
+
       if (!user) {
         return res.status(404).json({ error: "No account found with this phone number. Please register first." });
       }

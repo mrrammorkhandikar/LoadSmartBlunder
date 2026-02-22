@@ -16,7 +16,7 @@ import {
   BarChart3
 } from "lucide-react";
 
-import logoPath from "@assets/Purple_and_Black_Modern_Software_Developer_LinkedIn_Banner_1770118882647.png";
+const logoPath = "/assets/Purple_and_Black_Modern_Software_Developer_LinkedIn_Banner_1770118882647.png";
 import loadBoardScreenshot from "@assets/Screenshot_2026-02-04_at_6.10.24_PM_1770208825423.png";
 import shipperPostLoadScreenshot from "@assets/Screenshot_2026-02-04_at_6.21.15_PM_1770209478249.png";
 

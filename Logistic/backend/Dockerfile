@@ -6,7 +6,7 @@ ARG NODE_ENV=production
 ENV NODE_ENV=$NODE_ENV
 
 COPY backend/package*.json ./
-RUN npm install
+RUN npm install --include=dev
 
 COPY backend/. .
 

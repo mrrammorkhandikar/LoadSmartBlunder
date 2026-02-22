@@ -21,7 +21,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import logoPath from "@assets/Purple_and_Black_Modern_Software_Developer_LinkedIn_Banner_1770118882647.png";
+const logoPath = "/assets/Purple_and_Black_Modern_Software_Developer_LinkedIn_Banner_1770118882647.png";
 import heroCollagePath from "@assets/image_1770401884913.png";
 import roadexLogoPath from "@assets/image_1770401901765.png";
 
