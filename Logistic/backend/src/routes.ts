@@ -69,6 +69,7 @@ import {
 } from "@shared/pricing";
 import { registerHelpBotRoutes } from "./helpbot-routes";
 import { registerSurepassRoutes } from "./surepass-routes";
+import { verifyEmailCheck, verifyGstin, verifyPanComprehensive } from "./surepass-service";
 import { registerTripRoutes } from "./trips/trip-routes";
 
 declare module 'express-serve-static-core' {
@@ -4657,61 +4658,6 @@ RESPOND IN THIS EXACT JSON FORMAT:
     }
   });
 
-  // Generate simulated bid for a load
-  app.post("/api/admin/negotiations/:loadId/simulate", requireAuth, async (req, res) => {
-    try {
-      const user = await storage.getUser(req.session.userId!);
-      if (!user || user.role !== "admin") {
-        return res.status(403).json({ error: "Admin access required" });
-      }
-
-      const { loadId } = req.params;
-      const load = await storage.getLoad(loadId);
-      if (!load) {
-        return res.status(404).json({ error: "Load not found" });
-      }
-
-      // Generate simulated carrier names
-      const simulatedCarrierNames = [
-        "Swift Logistics",
-        "Premium Freight Co",
-        "Highway Express",
-        "National Transport",
-        "Metro Carriers",
-        "Rapid Delivery",
-        "Elite Trucking",
-        "Prime Movers",
-      ];
-
-      const carrierName = simulatedCarrierNames[Math.floor(Math.random() * simulatedCarrierNames.length)];
-      
-      // Generate realistic bid amount based on admin price
-      const basePrice = Number(load.adminFinalPrice) || 50000;
-      const variance = 0.1 + Math.random() * 0.15; // 10-25% variance
-      const bidAmount = Math.round(basePrice * (1 - variance));
-
-      // Create simulated bid message
-      const message = await storage.createBidNegotiation({
-        loadId,
-        senderRole: "carrier",
-        messageType: "simulated_bid",
-        message: `Bid placed: Rs. ${bidAmount.toLocaleString('en-IN')}`,
-        amount: bidAmount.toString(),
-        isSimulated: true,
-        simulatedCarrierName: carrierName,
-        carrierType: Math.random() > 0.5 ? "enterprise" : "solo",
-      });
-
-      // Update thread bid count
-      await storage.incrementThreadBidCount(loadId, true);
-
-      res.json({ success: true, message, carrierName, bidAmount });
-    } catch (error) {
-      console.error("Simulate bid error:", error);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
   // Get negotiation counters for dashboard
   app.get("/api/admin/negotiations/counters", requireAuth, async (req, res) => {
     try {
@@ -4844,8 +4790,22 @@ RESPOND IN THIS EXACT JSON FORMAT:
           const shipper = await storage.getUser(load.shipperId);
           const loadBids = await storage.getBidsByLoad(load.id);
           const myBid = loadBids.find(b => b.carrierId === user.id);
+
+          let carrierPayout = load.finalPrice || "0";
+          if ((!carrierPayout || parseFloat(carrierPayout) <= 0) && load.adminFinalPrice && parseFloat(load.adminFinalPrice) > 0) {
+            carrierPayout = String(Math.round(parseFloat(load.adminFinalPrice) * 0.9 * 100) / 100);
+          }
+
+          const {
+            adminSuggestedPrice: _adminSuggestedPrice,
+            adminPerTonneRate: _adminPerTonneRate,
+            adminFinalPrice: _adminFinalPrice,
+            ...carrierSafeLoad
+          } = load as any;
+
           return {
-            ...load,
+            ...carrierSafeLoad,
+            finalPrice: carrierPayout,
             shipperName: shipper?.companyName || shipper?.username,
             bidCount: loadBids.length,
             myBid: myBid || null,
@@ -4858,6 +4818,60 @@ RESPOND IN THIS EXACT JSON FORMAT:
       res.json(enrichedLoads);
     } catch (error) {
       console.error("Get carrier available loads error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/api/carrier/my-orders", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user || user.role !== "carrier") {
+        return res.status(403).json({ error: "Carrier access required" });
+      }
+
+      const carrierLoads = await storage.getLoadsByCarrier(user.id);
+      const directAssignments = carrierLoads.filter(load => load.adminPostMode === "assign");
+
+      const enrichedOrders = await Promise.all(
+        directAssignments.map(async (load) => {
+          const shipper = load.shipperId ? await storage.getUser(load.shipperId) : null;
+          const shipment = await storage.getShipmentByLoad(load.id);
+          const decision = load.adminDecisionId ? await storage.getAdminDecision(load.adminDecisionId) : null;
+
+          let carrierPayout = load.finalPrice || "0";
+          if ((!carrierPayout || parseFloat(carrierPayout) <= 0) && load.adminFinalPrice && parseFloat(load.adminFinalPrice) > 0) {
+            carrierPayout = String(Math.round(parseFloat(load.adminFinalPrice) * 0.9 * 100) / 100);
+          }
+
+          const {
+            adminSuggestedPrice: _adminSuggestedPrice,
+            adminPerTonneRate: _adminPerTonneRate,
+            adminFinalPrice: _adminFinalPrice,
+            ...carrierSafeLoad
+          } = load as any;
+
+          return {
+            ...carrierSafeLoad,
+            finalPrice: carrierPayout,
+            shipperName: shipper?.companyName || shipper?.username || null,
+            shipperPhone: shipper?.phone || null,
+            shipmentId: shipment?.id || null,
+            shipmentStatus: shipment?.status || null,
+            assignedBy: decision ? "Admin" : "System",
+            assignedAt: load.awardedAt || load.statusChangedAt || load.createdAt,
+          };
+        })
+      );
+
+      enrichedOrders.sort((a, b) => {
+        const aTime = a.assignedAt ? new Date(a.assignedAt).getTime() : 0;
+        const bTime = b.assignedAt ? new Date(b.assignedAt).getTime() : 0;
+        return bTime - aTime;
+      });
+
+      res.json(enrichedOrders);
+    } catch (error) {
+      console.error("Get carrier my-orders error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -10467,6 +10481,38 @@ RESPOND IN THIS EXACT JSON FORMAT:
       });
 
       const validatedData = onboardingSchema.parse(req.body);
+
+      const panVerification = await verifyPanComprehensive({
+        panNumber: validatedData.panNumber,
+        userId: user.id,
+      });
+      if (!panVerification || panVerification.success !== true) {
+        return res.status(400).json({ error: "PAN verification failed", details: panVerification });
+      }
+
+      if (validatedData.gstinNumber) {
+        const gstVerification = await verifyGstin({
+          gstinNumber: validatedData.gstinNumber,
+          userId: user.id,
+        });
+        const gstData: any = gstVerification?.data || {};
+        const gstStatus = typeof gstData.gstin_status === "string" ? gstData.gstin_status.toLowerCase() : "";
+        const isGstinValid = gstVerification.success === true && gstStatus.includes("active");
+        if (!isGstinValid) {
+          return res.status(400).json({ error: "GSTIN verification failed", details: gstVerification });
+        }
+      }
+
+      const emailVerification = await verifyEmailCheck({
+        email: validatedData.contactPersonEmail,
+        userId: user.id,
+      });
+      const emailData: any = emailVerification?.data || {};
+      const emailStatus = typeof emailData.status === "string" ? emailData.status.toLowerCase() : "";
+      const isEmailValid = emailVerification.success === true && emailData.deliverable === true && emailStatus === "deliverable";
+      if (!isEmailValid) {
+        return res.status(400).json({ error: "Email verification failed", details: emailVerification });
+      }
 
       // Sanitize numeric fields - remove commas from formatted numbers
       const sanitizedCreditLimit = validatedData.requestedCreditLimit 

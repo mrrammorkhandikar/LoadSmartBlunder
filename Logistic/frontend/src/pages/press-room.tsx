@@ -17,9 +17,9 @@ import {
   Globe, TrendingUp, Users, Truck, CheckCircle2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import newsFreepImg from "@assets/image_1770402429539.png";
-import newsTruckerImg from "@assets/image_1770402550795.png";
-import newsMliveImg from "@assets/image_1770402663970.png";
+import newsFreepImg from "@assets/images/news-freep.jpg";
+import newsTruckerImg from "@assets/images/news-trucker.jpg";
+import newsMliveImg from "@assets/images/news-mlive.jpg";
 
 export default function PressRoomPage() {
   const [, setLocation] = useLocation();

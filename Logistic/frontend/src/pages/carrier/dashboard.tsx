@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/stat-card";
 import { useAuth } from "@/lib/auth-context";
 import { useTrucks, useLoads, useShipments, useSettlements } from "@/lib/api-hooks";
-import { useCarrierData } from "@/lib/carrier-data-store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { connectMarketplace, onMarketplaceEvent, offMarketplaceEvent } from "@/lib/marketplace-socket";
@@ -177,7 +176,6 @@ export default function CarrierDashboard() {
   const { data: allLoads, isLoading: loadsLoading } = useLoads();
   const { data: allShipments } = useShipments();
   const { data: allSettlements } = useSettlements();
-  const { getRevenueAnalytics, completedTrips: mockCompletedTrips } = useCarrierData();
 
   // Fetch real performance metrics from trip history
   const { data: realPerformanceData } = useQuery<{
@@ -199,7 +197,7 @@ export default function CarrierDashboard() {
     queryKey: ["/api/carrier/performance"],
   });
 
-  // Calculate combined revenue (API + mock data like Revenue page)
+  // Calculate revenue from real shipments and settlements
   const combinedRevenueData = useMemo(() => {
     const myShipments = (allShipments || []).filter((s: Shipment) => 
       s.carrierId === user?.id && s.status === 'delivered'
@@ -220,28 +218,20 @@ export default function CarrierDashboard() {
       return sum + (load?.adminFinalPrice ? parseFloat(load.adminFinalPrice) * 0.85 : 0);
     }, 0);
 
-    // Get mock data revenue
-    const mockRevenue = getRevenueAnalytics();
-    const mockTotalRevenue = mockRevenue?.totalRevenue || 0;
-    const mockCompletedCount = mockCompletedTrips?.length || 0;
-
-    // Combine API revenue with mock data
     const realRevenue = totalSettlementRevenue > 0 ? totalSettlementRevenue : shipmentRevenue;
-    const totalRevenue = realRevenue + mockTotalRevenue;
-    const totalTrips = myShipments.length + mockCompletedCount;
+    const totalRevenue = realRevenue;
+    const totalTrips = myShipments.length;
     
     return {
       totalRevenue,
       totalTrips,
       hasData: totalRevenue > 0 || totalTrips > 0,
       realTrips: myShipments.length,
-      mockTrips: mockCompletedCount
     };
-  }, [allShipments, allSettlements, allLoads, user?.id, getRevenueAnalytics, mockCompletedTrips]);
+  }, [allShipments, allSettlements, allLoads, user?.id]);
 
-  // Calculate performance metrics - prioritize real API data, fallback to mock data
+  // Calculate performance metrics from real trip history
   const performanceMetrics = useMemo(() => {
-    // If real performance data exists from API, use it
     if (realPerformanceData?.hasData) {
       return {
         onTimeRate: realPerformanceData.onTimeRate || 0,
@@ -253,36 +243,8 @@ export default function CarrierDashboard() {
         isRealData: true
       };
     }
-
-    // Fallback to mock data if no real trip history
-    const trips = mockCompletedTrips || [];
-    if (trips.length === 0) {
-      return null;
-    }
-
-    // Calculate on-time delivery rate
-    const onTimeCount = trips.filter(t => t.onTimeDelivery).length;
-    const onTimeRate = Math.round((onTimeCount / trips.length) * 100);
-
-    // Calculate average driver performance rating (out of 5)
-    const avgDriverRating = trips.reduce((sum, t) => sum + t.driverPerformanceRating, 0) / trips.length;
-
-    // Calculate average shipper rating (out of 5)
-    const avgShipperRating = trips.reduce((sum, t) => sum + t.shipperRating, 0) / trips.length;
-
-    // Calculate overall score (weighted average, out of 5)
-    const overallScore = (avgDriverRating * 0.4 + avgShipperRating * 0.3 + (onTimeRate / 100) * 5 * 0.3);
-
-    return {
-      onTimeRate,
-      reliabilityScore: avgDriverRating,
-      communicationScore: avgShipperRating,
-      overallScore,
-      totalTrips: trips.length,
-      totalRatings: 0,
-      isRealData: false
-    };
-  }, [realPerformanceData, mockCompletedTrips]);
+    return null;
+  }, [realPerformanceData]);
 
   if (statsLoading || loadsLoading || isLoadingOnboarding) {
     return (

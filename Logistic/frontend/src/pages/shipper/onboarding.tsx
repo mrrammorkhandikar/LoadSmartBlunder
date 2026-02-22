@@ -145,6 +145,7 @@ export default function ShipperOnboarding() {
   const [activeTab, setActiveTab] = useState("business");
   const [autoSaveStatus, setAutoSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [showFullForm, setShowFullForm] = useState(false);
+  const [isVerifyingKyc, setIsVerifyingKyc] = useState(false);
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedDataRef = useRef<string>("");
 
@@ -410,7 +411,119 @@ export default function ShipperOnboarding() {
     },
   });
 
-  const onSubmit = (data: OnboardingFormData) => {
+  const verifyKycBeforeSubmit = async (data: OnboardingFormData) => {
+    const panNumber = data.panNumber.trim();
+    const gstinNumber = data.gstinNumber?.trim();
+    const email = data.contactPersonEmail.trim();
+
+    setIsVerifyingKyc(true);
+    try {
+      console.log("KYC verification started", { panNumber, gstinNumber, email });
+      // PAN comprehensive is mandatory gate
+      try {
+        console.log("KYC PAN: calling /api/kyc/pan-comprehensive");
+        const res = await apiRequest("POST", "/api/kyc/pan-comprehensive", {
+          pan_number: panNumber,
+        });
+        const body = await res.json();
+        console.log("Surepass PAN comprehensive response:", body);
+        if (!body || body.success !== true) {
+          toast({
+            title: "PAN verification failed",
+            description: "Please check your PAN number and try again.",
+            variant: "destructive",
+          });
+          return false;
+        }
+      } catch (error: any) {
+        console.error("KYC PAN error:", error);
+        toast({
+          title: "PAN verification failed",
+          description: "PAN could not be verified with Surepass. Please try again or contact support.",
+          variant: "destructive",
+        });
+        return false;
+      }
+
+      // GSTIN is optional, but if provided it must pass verification
+      if (gstinNumber) {
+        try {
+          console.log("KYC GSTIN: calling /api/kyc/gstin");
+          const res = await apiRequest("POST", "/api/kyc/gstin", {
+            gstin_number: gstinNumber,
+          });
+          const body = await res.json();
+          console.log("Surepass GSTIN response:", body);
+          const gstData = body?.data || {};
+          const status = typeof gstData.gstin_status === "string" ? gstData.gstin_status.toLowerCase() : "";
+          const isGstinValid =
+            body?.success === true &&
+            status.includes("active");
+
+          if (!isGstinValid) {
+            toast({
+              title: "GSTIN verification failed",
+              description: "Please check your GST number or submit without it.",
+              variant: "destructive",
+            });
+            return false;
+          }
+        } catch (error: any) {
+          console.error("KYC GSTIN error:", error);
+          toast({
+            title: "GSTIN verification failed",
+            description: "GSTIN could not be verified with Surepass. Please try again or remove the GSTIN.",
+            variant: "destructive",
+          });
+          return false;
+        }
+      }
+
+      // Email check is mandatory gate
+      try {
+        console.log("KYC Email: calling /api/kyc/email-check");
+        const res = await apiRequest("POST", "/api/kyc/email-check", {
+          email,
+        });
+        const body = await res.json();
+        console.log("Surepass email-check response:", body);
+        const emailData = body?.data || {};
+        const emailStatus = typeof emailData.status === "string" ? emailData.status.toLowerCase() : "";
+        const isEmailValid =
+          body?.success === true &&
+          emailData.deliverable === true &&
+          emailStatus === "deliverable";
+
+        if (!isEmailValid) {
+          toast({
+            title: "Email verification failed",
+            description: "Please check the email address and try again.",
+            variant: "destructive",
+          });
+          return false;
+        }
+      } catch (error: any) {
+        console.error("KYC Email error:", error);
+        toast({
+          title: "Email verification failed",
+          description: "Email could not be verified with Surepass. Please try again.",
+          variant: "destructive",
+        });
+        return false;
+      }
+
+      return true;
+    } finally {
+      setIsVerifyingKyc(false);
+    }
+  };
+
+  const onSubmit = async (data: OnboardingFormData) => {
+    const okToSubmit = await verifyKycBeforeSubmit(data);
+    if (!okToSubmit) {
+      return;
+    }
+
     if (onboardingStatus && (onboardingStatus.status === "on_hold" || onboardingStatus.status === "rejected")) {
       updateMutation.mutate(data);
     } else {
@@ -632,7 +745,7 @@ export default function ShipperOnboarding() {
           form={form} 
           onSubmit={onSubmit} 
           onInvalid={onInvalid}
-          isSubmitting={updateMutation.isPending}
+          isSubmitting={updateMutation.isPending || isVerifyingKyc}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           isUpdate={true}
@@ -679,7 +792,7 @@ export default function ShipperOnboarding() {
         form={form} 
         onSubmit={onSubmit} 
         onInvalid={onInvalid}
-        isSubmitting={submitMutation.isPending}
+        isSubmitting={submitMutation.isPending || isVerifyingKyc}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         isUpdate={false}

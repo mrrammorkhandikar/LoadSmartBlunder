@@ -49,7 +49,7 @@ The backend is configured with the following keys:
 - `PORT`: Server port (default: 5000).
 - `DATABASE_URL`: Connection string for PostgreSQL.
 - `NODE_ENV`: `development` or `production`.
-- `OPENAI_API_KEY`: API key for AI features.
+
 
 *Note: The frontend does not currently use a `.env` file, as it relies on the proxy and relative paths.*
 
